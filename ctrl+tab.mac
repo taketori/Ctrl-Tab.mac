@@ -1,0 +1,302 @@
+// ctrl+tab.mac
+$mn = "Ctrl+Tabマクロ";
+// タブバーを表示するマクロ。
+// Copyright (C) 2009- taketori <taketori at x10d.jp>
+// http://www.x10d.jp/
+//
+// 起動すると、タブバーを表示する。
+// 普段はタブバーを隠している環境で利用されることを想定。
+//
+// 本マクロに任意のキーをキー割り当てしておく(ctrl+tabに割り当てられることを想定しているので、以下、ctrl+tab で説明します)。
+// ctrl+tabを押下して本マクロを起動すると、タブバーを表示するとともに次のタブがアクティブになる。
+// その状態(ctrlを押下したまま)でtabを押していくたびに、その次のタブがアクティブになる。
+// shift(変更可)+ctrl+tabを押下すると、同じく前のタブがアクティブになる。
+// alt(変更可)+ctrl+tabを押下すると、次のグループがアクティブになる。shift+alt+ctrl+tabだと、同様に前のグループ。
+// ctrlなどを押下したままtabを押さずに数秒(変更可)経過すると、単語補完を表示するので、そこから開くファイルを履歴(ファイル・プロジェクト・デスクトップ)、現在のフォルダにあるファイル、ブックマーク、プロジェクト、デスクトップから選ぶことができる。また、そのデフォルトフォルダを、フォルダ履歴、フォルダリストから選ぶことができる。
+// ctrlなどを押下しなくなると、タブバーを非表示にしてマクロを終了する。
+//
+
+// タブバーを表示する位置。
+// 0=上:、1=下。非表示=2:20000000
+#DispTBarPos = 0;
+
+//*逆順に表示するときの修飾キー。
+// 1=Shift, 2=Ctrl, 4=Alt
+#ReverseMod = 1;
+//*別グループを表示するときの修飾キー。
+#OtherHmMod = 4;
+
+//*ダイアログを表示するまでの時間(ミリ秒)
+// アクティブタブが変更されていない、または起動時と同一のタブにフォーカスがあるとき。
+#time_to_exit = 3000;
+// アクティブタブが変更された後。
+#time_to_exit_if_change = 5000;
+// 起動時と同一のタブにフォーカスがあり、全てのキーを放した後(#exit_condが1以上の時に有効)。
+#time_to_change_focus = 1000;
+
+// 終了条件
+if(3 <= #DispTBarPos){
+	message $mn + "\\n#DispTBarPosの値が不正に大きいので、マクロを終了します。";
+	endmacro;
+}
+if(8 <= #ReverseMod){
+	message $mn + "\\n#ReverseModの値が不正に大きいので、マクロを終了します。";
+	endmacro;
+}
+if(8 <= #OtherHmMod){
+	message $mn + "\\n#OtherHmModの値が不正に大きいので、マクロを終了します。";
+	endmacro;
+}
+
+INIT:
+
+	// 最初のキーを設定する。
+	call get_key_status 0x0000, #ReverseMod;
+	if( ##return & 0x002 ){
+		#First = ##return;
+		debuginfo "First:" + hex(#First);
+	}
+
+MAIN:
+
+	title $mn + " - タブバーを表示しています。";
+	call disp_tabbar;
+
+	##key = 0x0004;
+	##now = tickcount;
+	##disable_time = #time_to_exit;
+	##hdlcurrent = getcurrenttab(0, tabgroup);
+	##exec_mod = 0x70 - (0x10 * #ReverseMod) - (0x10 * #OtherHmMod);
+	while( tickcount <= ##now + ##disable_time && ##key & 0x000F != 0 ){
+		refreshdatetime;
+
+		//何かキー（文字以外でも）が押されているとき、そのキーコードetcを取得。
+		call get_key_status ##key, #ReverseMod, keypressed;		//***
+
+		// 文字キーが押下、それが「最初と異なる」または「同じだけど修飾キーが#ReverseModや#OtherHmModの有無以外」→終了
+		if( ##return/* *** の返値 */ & 0x0002 == 2		// 文字キーが押された
+		&& ( #First & 0xFF00 != ##return & 0xFF00		// 文字キーが異なる
+			 || (#First & 0x00F0) & (##return & 0x00F0) & ##exec_mod == 0 ) )		// 修飾キーが異なる。
+		{
+			break;
+		}
+
+		//文字キーが押されてないとき→ループを再評価
+		if( (##return/* *** の返値*/ & 0x0002) == 0 ){
+			##key = ##return;
+			continue;
+		}
+		##key = ##return;
+
+		//タブの回転方向を変える: 最初のキーと現在のキーとの違いに#ReverseModが含まれる→逆順。
+		##direction = 1;		//##direction: 1:正回転，0:逆回転
+		if(##key & 0x00F0 & (#ReverseMod * 0x10)){
+			##direction = 0;
+		}
+
+		//アクティブな秀丸を変更: 最初のキーと現在のキーとの違いに#OtherHmModが含まれる
+		##change_group = 0;		//##change_group: 1:別の秀丸，0:同じ秀丸
+		if(##key & 0x00F0 & (#OtherHmMod * 0x10)){
+			##change_group = 1;
+		}
+
+		// アクティブなタブを変更。
+		call disp_tabbar 1;
+		if(##change_group){
+			call change_hm ##direction;
+		}else{
+			if(##direction)
+				nexttab;
+			else
+				prevtab;
+		}
+		call disp_tabbar;
+
+		// タブバーを閉じるまでの時間を再設定する。
+		if( taborder == ##tab_order )
+				##disable_time = #time_to_exit_if_change;
+		##now = tickcount;
+
+	}
+
+	call disp_tabbar 1;
+
+	call list_and_open ##return & 0xFF00 / 0x100 + 32/*aの文字コード(= 97)-aのキーコード(= 65)*/, ##hdlcurrent;
+	if(##return)
+		goto MAIN;
+
+endmacro;
+
+get_key_status:
+//Arg:#キーコード("Ret"を参照), #ReverseMod [,keypressed]
+//Ret:#キーコード(0x0001=修飾キー有,0x0002=文字キー有,0x0010=Shift,0x0020=Ctrl,0x0040=Alt,0x0100～0xFE00=キーコード(16～18をのぞく)。0xFFF0=終了コード)
+
+	##ret = 0x0000;
+	##c = 1;																// キーコード
+	while( ##c <= 0x91 ){
+		if( iskeydown( ##c ) ){
+			if( 0x10 <= ##c && ##c <= 0x12)			// 16≦##c≦18 : 修飾キー
+				##ret = ##ret | 0x0001
+						| (0x0010 * ( ##c == 0x10 ))	// Shift
+						| (0x0020 * ( ##c == 0x11 ))	// Ctrl
+						| (0x0040 * ( ##c == 0x12 ));	// Alt
+			else	##ret = ##ret | (##c * 0x0100) | 0x0002;
+		}
+		##c = ##c + 1;
+	}
+
+	//押されていたCtrl,Shift,Altキーが離されたときで、それが#ReverseModじゃないとき→終了コード
+	if( 0x0001 & ##1
+	&& (0x0001 & ##ret) == 0
+	&& ((##1 / 0x0010) ^ (##ret / 0x0010) != ##2) ){
+		##ret = 0xFFF0;
+	}
+
+	debuginfo "get_key_status: " + hex(##ret) + " :S" + hex(##ret & 0x0010) + ":C" + hex(##ret & 0x0020) + ":A" + hex(##ret & 0x0040);
+
+return ##ret;
+
+disp_tabbar:
+// タブバーの表示・非表示を切り替える。
+//Arg: #非表示にするか
+//USE: #DispTBarPos
+
+	##reg_tabedit = 0;		// レジストリのTabEdit(タブバーを表示する場所)
+	openreg "CURRENTUSER", "Software\\Hidemaruo\\Hidemaru\\Env";
+	##reg_tabedit = getregnum("TabEdit");
+
+	if( ##reg_tabedit & 0x20000000 || ##1 == false ){
+		// 表示する。
+		writeregnum "TabEdit", (##reg_tabedit % 0x10000000) | (#DispTBarPos * 0x10000000);
+	}else{
+		// 非表示にする。
+		writeregnum "TabEdit", (##reg_tabedit % 0x10000000) | 0x20000000;
+	}
+	closereg;
+	envchanged;
+
+return;
+
+change_hm:
+// 別のグループの秀丸を表示する。
+//Arg: #正回転か。
+//TODO: http://homepage3.nifty.com/_htom/macro/tips_main.html#label-108
+
+	if(tabgrouptotal == 1){
+		title $mn + " - グループは一つしかありません。";
+		return;
+	}
+
+	if(##1){
+		//次のグループ
+		##ghandle = getcurrenttab( true, 1 );
+	}else{
+		//前のグループ
+		##ghandle = getcurrenttab( true, tabgrouptotal - 1 );
+	}
+
+	setactivehidemaru ##ghandle, getcurrenttab( true, tabgrouptotal - 1 );
+
+return;
+
+list_and_open:
+//開くもの(ファイル・プロジェクト・デスクトップetc)を、リストから選ぶ。
+//新しくタブを開き、その中に履歴やファイルリストを表示する。そのリストから補完する。
+//Arg: #押されている文字に対応する、文字コード。#起動時のタブのウィンドウハンドル
+//Ret: 0:続行しない。1:続行する
+
+	if(##1 == 'o'){		// f, h, nの動作をすべて行えるモード。
+		call open_file ##1;
+	}else	if(##1 == 'f'){		// 既存のファイルを開く
+	}else	if(##1 == 'h'){		// ファイル履歴から開く
+	}else	if(##1 == 'n'){		// ファイルを新規作成
+	}else	if(##1 == 'q'){		// 起動時の秀丸に戻る
+		setactivehidemaru ##2;
+		return 1;
+//	}else if(##1 == 'b'){		// ブックマーク、またはその履歴から開く
+//	}else if(##1 == 'p'){		// プロジェクト、またはその履歴から開く
+//	}else if(##1 == 'd'){		// デスクトップ、またはその履歴から開く
+	}
+
+return 0;
+
+open_file:
+// ファイルを開く。
+//Arg: #押されている文字に対応する、文字コード。
+//Ret:
+
+	$$flist = currentmacrofilename + ".dic";		// ファイルリスト補完用の辞書名
+	if(existfile($$flist, 1) & 0x011 != 0){
+		message $mn "\n指定された" + $$flist + "は、フォルダか読み取り専用なので続行できません。";
+		return;
+	}
+
+	// ファイル履歴を挿入して閉じる。
+	##i = 1;
+	##objFSO = createobject("Scripting.FileSystemObject");
+	##objOutput = callmethod_returnobj(##objFSO,
+									"OpenTextFile", $$flist, 2, true);  // 書き込みモードで開く
+	callmethod ##objOutput, "WriteLine", "\n***** file hist *****";
+	while(getfilehist(##i - 1) != ""){
+		callmethod ##objOutput, "WriteLine", "\\" + str(##i) + "\t " + getfilehist(##i - 1);
+		##i = ##i + 1;
+	}
+	callmethod ##objOutput, "Close";
+	releaseobject ##objOutput;
+	releaseobject ##objFSO;
+
+	// ファイルを開いて、補完用のエディットボックスを表示。
+	// 拘り: パス名の一部を指定して開くことができる。履歴は履歴番号を入力するだけで開く。DLLを使わないので早い。
+	openfile "/j1,1 /n /m4 " + $$flist;
+	##hdllist= hidemaruhandle(0);
+	title $mn + " - 開くファイルを選択してください。";
+	showoutlinebar;
+	title "ファイルを開く＝ファイル名または履歴番号を選択or入力してEnter。キャンセル＝Esc。", 2;
+	insert "\\";
+	//詳説: 履歴番号の入力で、履歴を開く。
+	// フォルダの一部を入力すると、候補が表示される。
+	// 候補の一部の文字列を消しても、候補が表示される。
+	// 連続した文字列を1つの文字列とみなし、候補が表示される。
+	// パスを絶対指定、相対指定しても、候補が表示される。
+	$$f = "";
+	while($$f == ""){
+		autocomplete -1, 0x206, 0x125113, $$flist;
+		if(iskeydown(8)){
+			backspace;
+			continue;
+		}
+		if(result){
+			$$f = gettext2(
+							column - (result & 0xffff0000) / 0x10000, 1,
+							column - result & 0x0000ffff,							1);
+			$$f = midstr($$f, strstr($$f, "\t ") + 2, );
+		}
+	}
+/*
+	// 空っぽとかキャンセルなら終了
+	if(result){
+		$$f = gettext2(
+						column - (result & 0xffff0000) / 0x10000, 1,
+						column - result & 0x0000ffff,							1);
+//	}else{
+//		$$f = gettext2(0, 1, linelen2, 1);
+	}
+	$$f = midstr($$f, strstr($$f, "\t ") + 2, );
+	message $$f;
+*/
+	clearupdated;
+	##objFSO = createobject("Scripting.FileSystemObject");
+	if(callmethod_returnnum(##objFSO, "FileExists", $$f)){
+		loadfile $$f;
+	}
+	if(callmethod_returnnum(##objFSO, "FolderExists", $$f)){
+		title $mn + " - 開くファイルのファイル名を選択してください。Esc=新規作成";
+		openfile $$f + leftstr("\\", (rightstr($$f, 1) != "\\"));
+	}
+	//TODO: existfile(leftstr($str, strlen($str) - (rightstr($str, 1) == "\\")), 0x10)
+	releaseobject ##objFSO;
+
+	closehidemaruforced ##hdllist;
+
+
+return;
